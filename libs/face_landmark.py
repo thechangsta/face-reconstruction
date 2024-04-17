@@ -86,6 +86,21 @@ def find_areas(points, triangles):
         areas.append(area)
     return np.array(areas)
 
+def color_query(image, points):
+
+    colors = []
+    for point in points:
+        x, y = point[:2]
+        x = int(x)
+        y = int(y)
+        try:
+            colors.append(image[y, x])
+        except:
+            colors.append([0, 0, 0])
+     
+    colors = np.array(colors)    
+    return colors
+
 if __name__ == '__main__':
 
     verbose_dir  = "verbose"
@@ -122,9 +137,11 @@ if __name__ == '__main__':
     axes[0,1].axis("off")
 
     inverse_warped_lmks = inverse_homography_transform(warped_lmks, H)
-    axes[0,2].imshow(cv2.cvtColor(source_image, cv2.COLOR_BGR2RGB))
-    axes[0,2].scatter(inverse_warped_lmks[:, 0], inverse_warped_lmks[:, 1], c='r', s=1)
-    axes[0,2].set_title("Inverse Warped Source Face - MSE: {:.4F}".format(np.mean((inverse_warped_lmks - source_lmks) ** 2)))
+    queried_color = color_query(source_image, inverse_warped_lmks)
+    queried_image = np.zeros_like(source_image)
+    queried_image[inverse_warped_lmks[:, 1].astype(int), inverse_warped_lmks[:, 0].astype(int)] = queried_color
+    axes[0,2].imshow(cv2.cvtColor(queried_image, cv2.COLOR_BGR2RGB))
+    axes[0,2].set_title("Color Query")
     axes[0,2].axis("off")
 
     axes[1,0].imshow(cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB))
@@ -137,6 +154,7 @@ if __name__ == '__main__':
         axes[1,1].plot(source_lmks[line, 0], source_lmks[line, 1], c='b', alpha=0.1)
     axes[1,1].scatter(source_lmks[triangles[demo_triangle_idx], 0], source_lmks[triangles[demo_triangle_idx], 1], c='r', s=3)
     axes[1,1].fill(source_lmks[triangles[demo_triangle_idx], 0], source_lmks[triangles[demo_triangle_idx], 1], c='r', alpha=0.5)
+    axes[1,1].text(source_lmks[triangles[demo_triangle_idx][0], 0], source_lmks[triangles[demo_triangle_idx][0], 1], "Area: {:.4f}".format(source_areas[demo_triangle_idx]), fontsize=8, color='r')
     axes[1,1].set_title("Source Face Landmarks")
     axes[1,1].set_aspect('equal')
     axes[1,1].invert_yaxis()
@@ -145,6 +163,7 @@ if __name__ == '__main__':
         axes[1,2].plot(target_lmks[line, 0], target_lmks[line, 1], c='b', alpha=0.1)
     axes[1,2].scatter(target_lmks[triangles[demo_triangle_idx], 0], target_lmks[triangles[demo_triangle_idx], 1], c='r', s=3)
     axes[1,2].fill(target_lmks[triangles[demo_triangle_idx], 0], target_lmks[triangles[demo_triangle_idx], 1], c='r', alpha=0.5)
+    axes[1,2].text(target_lmks[triangles[demo_triangle_idx][0], 0], target_lmks[triangles[demo_triangle_idx][0], 1], "Area: {:.4f}".format(target_areas[demo_triangle_idx]), fontsize=8, color='r')
     axes[1,2].set_title("Target Face Landmarks")
     axes[1,2].set_aspect('equal')
     axes[1,2].invert_yaxis()
