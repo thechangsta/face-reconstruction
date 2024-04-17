@@ -7,10 +7,8 @@ from collections import defaultdict
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-
-
-def face_landmark(image):
-    base_options = python.BaseOptions(model_asset_path='./checkpoints/models/face_landmarker_v2_with_blendshapes.task')
+def face_landmark(image, model_asset_path='./checkpoints/models/face_landmarker_v2_with_blendshapes.task'):
+    base_options = python.BaseOptions(model_asset_path=model_asset_path)
     options = vision.FaceLandmarkerOptions(base_options=base_options,
                                         output_face_blendshapes=True,
                                         output_facial_transformation_matrixes=True,
@@ -26,16 +24,19 @@ def face_landmark(image):
 
     return face_landmarks
 
-def find_H(image1, image2):
+def find_H_from_image(image1, image2):
     face_landmarks1 = face_landmark(image1)
     face_landmarks2 = face_landmark(image2)
-    num_points = face_landmarks1.shape[0]
+    H = find_H(face_landmarks1, face_landmarks2)
+    return H, (face_landmarks1, face_landmarks2)
 
+def find_H(landmarks1, landmarks2):
+    num_points = landmarks1.shape[0]
     # Compute homography
     A = []
     for i in range(num_points):
-        x1, y1, z1 = face_landmarks1[i]
-        x2, y2, z2 = face_landmarks2[i]
+        x1, y1, z1 = landmarks1[i]
+        x2, y2, z2 = landmarks2[i]
         # 3d
         A.append([x1, y1, z1, 1, 0, 0, 0, 0, 0, 0, 0, 0, -x2])
         A.append([0, 0, 0, 0, x1, y1, z1, 1, 0, 0, 0, 0, -y2])
@@ -49,7 +50,7 @@ def find_H(image1, image2):
     H[2] = V[-1][8:12]
     H[3,-1] = V[-1][-1]
     H = H / H[-1, -1]
-    return H, (face_landmarks1, face_landmarks2)
+    return H
 
 def homography_transform(points, H):
     h_points = np.ones((points.shape[0], 4))
@@ -63,7 +64,7 @@ def inverse_homography_transform(points, H):
     H_inv = np.linalg.inv(H)
     return homography_transform(points, H_inv)
 
-def find_triangles(edges):
+def find_triangles(edges=mp.solutions.face_mesh.FACEMESH_TESSELATION):
     graph = defaultdict(set) 
     for u, v in edges:
         graph[u].add(v)
@@ -87,19 +88,28 @@ def find_areas(points, triangles):
     return np.array(areas)
 
 def color_query(image, points):
-
     colors = []
+    valid_points = []
     for point in points:
         x, y = point[:2]
         x = int(x)
         y = int(y)
-        try:
-            colors.append(image[y, x])
-        except:
-            colors.append([0, 0, 0])
-     
+        
+        if x < 0 or x >= image.shape[1] or y < 0 or y >= image.shape[0]:
+            continue
+
+        valid_points.append(point)
+        colors.append(image[y, x])
+
     colors = np.array(colors)    
-    return colors
+    valid_points = np.array(valid_points)   
+    return colors, valid_points
+
+def color_query_image(image, points):
+    colors, valid_points = color_query(image, points)
+    queried_image = np.zeros_like(image)
+    queried_image[valid_points[:, 1].astype(int), valid_points[:, 0].astype(int)] = colors
+    return queried_image
 
 if __name__ == '__main__':
 
@@ -110,9 +120,11 @@ if __name__ == '__main__':
     source_path = "dataset/val/n000001/0007_01.jpg"
     target_path = "dataset/val/n000001/0047_01.jpg"
     source_image = cv2.imread(source_path)
+    source_image = cv2.cvtColor(source_image, cv2.COLOR_BGR2RGB)
     target_image = cv2.imread(target_path)
+    target_image = cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB)
 
-    H, (source_lmks, target_lmks) = find_H(source_image, target_image)
+    H, (source_lmks, target_lmks) = find_H_from_image(source_image, target_image)
     triangles = find_triangles(mp.solutions.face_mesh.FACEMESH_TESSELATION)
     source_areas = find_areas(source_lmks, triangles)
     target_areas = find_areas(target_lmks, triangles)
@@ -122,8 +134,10 @@ if __name__ == '__main__':
     print("Number of triangles:", triangles.shape[0])
     print("Max, Min triangle area in source image:", np.max(source_areas), np.min(source_areas))
     print("Max, Min triangle area in target image:", np.max(target_areas), np.min(target_areas))
+    print("=====================================")
 
-    # Draw landmarks
+    # Plot the result
+    out_path = os.path.join(verbose_dir, 'demo_landmark.png')
     fig, axes = plt.subplots(2, 3, figsize=(12, 8))
     axes[0,0].imshow(cv2.cvtColor(source_image, cv2.COLOR_BGR2RGB))
     axes[0,0].scatter(source_lmks[:, 0], source_lmks[:, 1], c='r', s=1)
@@ -131,20 +145,18 @@ if __name__ == '__main__':
     axes[0,0].axis("off")
 
     warped_lmks = homography_transform(source_lmks, H)
-    axes[0,1].imshow(cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB))
+    axes[0,1].imshow(target_image)
     axes[0,1].scatter(warped_lmks[:, 0], warped_lmks[:, 1], c='r', s=1)
     axes[0,1].set_title("Warped Source Face - MSE: {:.4F}".format(np.mean((warped_lmks - target_lmks) ** 2)))
     axes[0,1].axis("off")
 
     inverse_warped_lmks = inverse_homography_transform(warped_lmks, H)
-    queried_color = color_query(source_image, inverse_warped_lmks)
-    queried_image = np.zeros_like(source_image)
-    queried_image[inverse_warped_lmks[:, 1].astype(int), inverse_warped_lmks[:, 0].astype(int)] = queried_color
-    axes[0,2].imshow(cv2.cvtColor(queried_image, cv2.COLOR_BGR2RGB))
+    queried_image = color_query_image(source_image, inverse_warped_lmks)
+    axes[0,2].imshow(queried_image)
     axes[0,2].set_title("Color Query")
     axes[0,2].axis("off")
 
-    axes[1,0].imshow(cv2.cvtColor(target_image, cv2.COLOR_BGR2RGB))
+    axes[1,0].imshow(target_image)
     axes[1,0].scatter(target_lmks[:, 0], target_lmks[:, 1], c='r', s=1)
     axes[1,0].set_title("Target Face")
     axes[1,0].axis("off")
@@ -168,9 +180,8 @@ if __name__ == '__main__':
     axes[1,2].set_aspect('equal')
     axes[1,2].invert_yaxis()
     
+    fig.suptitle("Demo landmark.py")
     plt.tight_layout()
-    plt.savefig(os.path.join(verbose_dir, 'face_landmark.png'))
-    print("Face landmarks saved at", os.path.join(verbose_dir, 'face_landmark.png'))
-
-    print("=====================================")
+    plt.savefig(out_path)
+    print("Results saved to: {}".format(out_path))
 
